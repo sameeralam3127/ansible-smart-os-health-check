@@ -25,6 +25,7 @@ Collection: `sameeralam3127.linux_vitals`
 - [Quick Start](docs/quickstart.md)
 - [Configuration Reference](docs/configuration-reference.md)
 - [Variable Reference](docs/variable-reference.md)
+- [Kernel & Reboot Detection](docs/kernel-reboot-detection.md) -- per-distro detection logic and known edge cases
 - [Report Guide](docs/report-guide.md) -- dashboard tour, JSON schema, findings reference
 - [Examples](docs/examples.md)
 - [Troubleshooting](docs/troubleshooting.md)

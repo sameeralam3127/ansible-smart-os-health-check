@@ -1,0 +1,23 @@
+---
+- name: Seed probe output for the scenario under test
+  ansible.builtin.set_fact:
+    linux_vitals_reboot_probe_output: "{{ scenario.probe }}"
+    linux_vitals_latest_kernel_selected: "{{ scenario.latest_kernel_selected }}"
+
+- name: Derive reboot requirement facts for the scenario
+  ansible.builtin.include_tasks: ../../roles/vitals_scan/tasks/reboot_facts.yml
+
+- name: Record the derived facts for the scenario
+  ansible.builtin.set_fact:
+    scenario_results: >-
+      {{
+        scenario_results | combine({
+          scenario.name: {
+            'required': linux_vitals_reboot_required,
+            'source': linux_vitals_reboot_required_source,
+            'supported': linux_vitals_reboot_detection_supported,
+            'packages': linux_vitals_reboot_required_packages,
+            'reason': linux_vitals_reboot_reason,
+          }
+        })
+      }}

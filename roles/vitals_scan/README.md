@@ -10,6 +10,10 @@ failed-login data, then builds one `linux_vitals_result` fact per host with
 a `final_status` (`Pass`/`Fail`) and a list of `findings`. Never changes
 anything on the managed host.
 
+Per-distro reboot detection, latest-kernel selection, bootloader default
+resolution, and their known edge cases are documented in
+[docs/kernel-reboot-detection.md](https://github.com/sameeralam3127/linux-vitals/blob/main/docs/kernel-reboot-detection.md).
+
 ## Role Variables
 
 See [docs/variable-reference.md](https://github.com/sameeralam3127/linux-vitals/blob/main/docs/variable-reference.md#vitals_scan----thresholds-and-windows)

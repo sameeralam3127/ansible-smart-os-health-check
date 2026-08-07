@@ -20,6 +20,8 @@
       "running_kernel": {{ result.running_kernel | to_json }},
       "latest_kernel_selected": {{ result.latest_kernel_selected | to_json }},
       "reboot_required": {{ result.reboot_required | to_json }},
+      "reboot_required_source": {{ result.reboot_required_source | default('unavailable') | to_json }},
+      "reboot_pending_packages": {{ result.reboot_required_packages | default([]) | to_json }},
       "boot_space_status": {{ result.boot_space_status | to_json }},
       "failed_login_count": {{ result.failed_login_count | int }},
       "findings": {{ result.findings | to_json }}

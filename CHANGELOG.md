@@ -4,6 +4,72 @@ All notable changes to the `sameeralam3127.linux_vitals` collection are document
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.0] - 2026-08-07
+
+Distro-specific hardening of reboot-required, latest-kernel, and bootloader
+default detection ([#2](https://github.com/sameeralam3127/linux-vitals/issues/2)).
+
+### Added
+
+- **Reboot detection now reports *how* it decided.** Every host carries
+  `reboot_required_source`, `reboot_detection_supported`,
+  `reboot_required_packages`, and a human-readable `reboot_reason` alongside
+  `reboot_required`. These surface in the JSON report (`reboot.source`,
+  `reboot.detection_supported`, `reboot.pending_packages`, `reboot.reason`),
+  the generic webhook payload, the Slack host breakdown, and the dashboard's
+  host detail.
+- **Debian/Ubuntu pending packages.** The packages that requested the reboot
+  are read from `/run/reboot-required.pkgs` and reported per host.
+- **SUSE `zypper needs-rebooting`.** Used when available (exit `102` means a
+  reboot is needed), falling back to the marker files for older zypper.
+- **dnf5 hosts.** When the standalone `needs-restarting` binary is absent,
+  `dnf needs-restarting --reboothint` is used before giving up.
+- **BLS boot entries.** `saved_entry`/`GRUB_DEFAULT` values that name a Boot
+  Loader Specification drop-in (RHEL 8+/Fedora, SUSE) now resolve by entry id
+  and by entry title, not just by `grub.cfg` menuentry title.
+- **systemd-boot.** `loader.conf`'s `default` -- including a glob such as
+  `fedora-*`, resolved to the version-highest match -- is read from
+  `loader/entries/`, so bootloader validation works on hosts with no GRUB.
+- **[docs/kernel-reboot-detection.md](docs/kernel-reboot-detection.md)**,
+  documenting the per-distro detection order and the known edge cases
+  (live-patched kernels, transactional/immutable hosts, auto-discovered UKIs,
+  `grub.cfg` submenus, containers, and more).
+- Tests covering the derived reboot facts, each distro probe, and bootloader
+  resolution (BLS id, `grub.cfg` index, systemd-boot glob, no bootloader),
+  plus a POSIX-syntax check of every embedded discovery script.
+
+### Fixed
+
+- **An unusable distro check was read as "no reboot needed".** A missing
+  `needs-restarting` (RHEL minimal images without `dnf-utils`) or a
+  non-`0`/`1` exit produced `reboot_required: false` -- indistinguishable from
+  a genuinely up-to-date host. Those hosts now fall back to the running-vs-latest
+  kernel comparison and report `reboot_required_source: kernel-comparison`.
+- **Stale `/lib/modules` directories could masquerade as the latest kernel.** A
+  directory left behind by an interrupted removal (no `modules.dep`, no image in
+  `/boot`) made a fully patched host report its kernel as outdated forever.
+  Directories are now filtered to ones that still look like an installed kernel,
+  with the unfiltered listing kept as a fallback.
+- **Kernel-comparison fallback referenced a fact defined in the same
+  `set_fact`.** The non-Debian/RedHat/SUSE branch of `linux_vitals_reboot_required`
+  read `linux_vitals_latest_kernel_selected` from the task that was defining it
+  (the same class of bug as 1.0.1/1.0.2). Reboot facts are now derived in their
+  own task file after discovery facts are set.
+- **`--tags kernel` skipped the bootloader finalize tasks.** The two
+  `Finalize bootloader ...` tasks carried no tags, so the documented
+  `--tags kernel,reporting` run left `linux_vitals_bootloader_default_matches_latest`
+  undefined and failed while building the result. Both are now tagged
+  `discovery`/`kernel`.
+- **Bootloader kernel paths weren't normalised.** Entries pointing at a symlink
+  (Debian's `/vmlinuz`), at a path relative to a separate `/boot` partition, or
+  at a `.efi`/`kernel-`-prefixed image compared unequal to the installed kernel
+  version and produced spurious "default boot entry does not select the latest
+  installed kernel" findings.
+
+### Changed
+
+- JSON report schema is now `1.2` (additive: the new `reboot.*` fields).
+
 ## [1.0.2] - 2026-07-12
 
 ### Fixed

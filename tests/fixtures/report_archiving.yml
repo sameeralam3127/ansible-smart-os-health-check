@@ -43,6 +43,10 @@
       bootloader_default_matches_latest: true
       bootloader_validation_message: "Default boot entry selects the latest installed kernel"
       reboot_required: false
+      reboot_detection_supported: true
+      reboot_required_source: "reboot-required-file"
+      reboot_required_packages: []
+      reboot_reason: "No reboot required (reboot-required-file)"
       selinux_status: "not-installed"
       apparmor_status: "enabled"
       boot_mount: "/boot"
