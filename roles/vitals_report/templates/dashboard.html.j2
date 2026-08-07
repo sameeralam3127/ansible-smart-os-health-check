@@ -574,9 +574,12 @@
           </td>
           <td>
             {% if result.reboot_required %}
-            <span class="pill pill--warning"><span class="dot"></span>Required</span>
+            <span class="pill pill--warning" title="{{ result.reboot_reason | default('') | e }}"><span class="dot"></span>Required</span>
             {% else %}
-            <span class="pill pill--good"><span class="dot"></span>No</span>
+            <span class="pill pill--good" title="{{ result.reboot_reason | default('') | e }}"><span class="dot"></span>No</span>
+            {% endif %}
+            {% if not result.reboot_detection_supported | default(true) %}
+            <div class="subtle">no distro check</div>
             {% endif %}
           </td>
           <td>
@@ -614,7 +617,11 @@
                 <strong>Uptime &amp; boot</strong>
                 <span>Uptime: {{ result.uptime | e }}</span><br>
                 <span>Last reboot: {{ result.last_reboot | e }}</span><br>
-                <span>Reboot required: {{ 'Yes' if result.reboot_required else 'No' }}</span>
+                <span>Reboot required: {{ 'Yes' if result.reboot_required else 'No' }}</span><br>
+                <span>{{ result.reboot_reason | default('') | e }}</span>
+                {% if result.reboot_required_packages | default([]) | length > 0 %}
+                <br><span class="subtle">Pending packages: {{ result.reboot_required_packages | join(', ') | e }}</span>
+                {% endif %}
               </div>
               <div class="detail-item">
                 <strong>Kernel &amp; bootloader</strong>

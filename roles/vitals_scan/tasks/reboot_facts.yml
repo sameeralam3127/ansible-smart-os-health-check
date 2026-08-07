@@ -1,0 +1,100 @@
+---
+- name: Parse distro reboot detection probe
+  ansible.builtin.set_fact:
+    linux_vitals_reboot_detection_supported: >-
+      {{
+        (
+          linux_vitals_reboot_probe_output
+          | regex_findall('(?m)^supported=(.*)$')
+          | first
+          | default('false')
+          | trim
+        ) == 'true'
+      }}
+    linux_vitals_reboot_detected: >-
+      {{
+        (
+          linux_vitals_reboot_probe_output
+          | regex_findall('(?m)^detected=(.*)$')
+          | first
+          | default('false')
+          | trim
+        ) == 'true'
+      }}
+    linux_vitals_reboot_detection_source: >-
+      {{
+        linux_vitals_reboot_probe_output
+        | regex_findall('(?m)^source=(.*)$')
+        | first
+        | default('', true)
+        | trim
+        | default('unavailable', true)
+      }}
+    linux_vitals_reboot_detection_detail: >-
+      {{
+        linux_vitals_reboot_probe_output
+        | regex_findall('(?m)^detail=(.*)$')
+        | first
+        | default('', true)
+        | trim
+      }}
+    linux_vitals_reboot_required_packages: >-
+      {{
+        linux_vitals_reboot_probe_output
+        | regex_findall('(?m)^packages=(.*)$')
+        | first
+        | default('', true)
+        | trim
+        | split(',')
+        | reject('equalto', '')
+        | list
+      }}
+  tags:
+    - discovery
+    - kernel
+
+- name: Finalize reboot requirement facts
+  ansible.builtin.set_fact:
+    linux_vitals_reboot_required: >-
+      {{
+        linux_vitals_reboot_detected
+        if linux_vitals_reboot_detection_supported
+        else not linux_vitals_latest_kernel_selected
+      }}
+    linux_vitals_reboot_required_source: >-
+      {{
+        linux_vitals_reboot_detection_source
+        if linux_vitals_reboot_detection_supported
+        else 'kernel-comparison'
+      }}
+  tags:
+    - discovery
+    - kernel
+
+- name: Finalize reboot requirement message
+  ansible.builtin.set_fact:
+    linux_vitals_reboot_reason: >-
+      {{
+        (
+          'Reboot required (' ~ linux_vitals_reboot_required_source ~ ')'
+          ~ (
+            ': ' ~ linux_vitals_reboot_detection_detail
+            if linux_vitals_reboot_detection_detail
+            else ''
+          )
+          ~ (
+            ' -- pending packages: ' ~ (linux_vitals_reboot_required_packages | join(', '))
+            if linux_vitals_reboot_required_packages
+            else ''
+          )
+        ) if linux_vitals_reboot_required and linux_vitals_reboot_detection_supported
+        else 'Reboot required: running kernel is not the latest installed kernel '
+             ~ '(no distro reboot check available on this host)'
+        if linux_vitals_reboot_required
+        else 'No reboot required (' ~ linux_vitals_reboot_required_source ~ ')'
+        if linux_vitals_reboot_detection_supported
+        else 'No reboot indicated, but no distro reboot check is available on this host'
+      }}
+  tags:
+    - discovery
+    - kernel

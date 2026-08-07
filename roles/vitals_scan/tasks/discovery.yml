@@ -95,21 +95,44 @@
     argv:
       - sh
       - -c
-      - "ls -1 /lib/modules 2>/dev/null | sort -V | tail -n 1"
-  register: linux_vitals_latest_kernel_cmd
-  changed_when: false
-  failed_when: false
-  tags:
-    - discovery
-    - kernel
+      - |
+          # A /lib/modules directory left behind by an interrupted package
+          # removal (no modules.dep, no matching image in /boot) is not an
+          # installed kernel -- counting it as "latest" produces a permanent
+          # false "latest installed kernel is not running" finding, so only
+          # directories that still look like a real kernel are considered.
+          list_installed_kernels() {
+            for module_dir in /lib/modules/*; do
+              [ -d "$module_dir" ] || continue
+              version="${module_dir##*/}"
+              if [ -f "$module_dir/modules.dep" ] ||
+                 [ -f "/boot/vmlinuz-$version" ] ||
+                 [ -f "/boot/vmlinuz-$version.efi" ] ||
+                 [ -f "/boot/kernel-$version" ]; then
+                printf '%s\n' "$version"
+              fi
+            done
+          }
 
-- name: Collect latest installed kernel timestamp
-  ansible.builtin.command:
-    argv:
-      - sh
-      - -c
-      - "latest=$(ls -1 /lib/modules 2>/dev/null | sort -V | tail -n 1); test -n \"$latest\" && stat -c '%y' \"/lib/modules/$latest\""
-  register: linux_vitals_latest_kernel_timestamp_cmd
+          latest="$(list_installed_kernels | sort -V | tail -n 1)"
+          filtered=true
+          if [ -z "$latest" ]; then
+            # Nothing passed the filter (minimal image, container, unusual
+            # layout) -- fall back to the unfiltered listing rather than
+            # reporting no installed kernel at all.
+            latest="$(ls -1 /lib/modules 2>/dev/null | sort -V | tail -n 1)"
+            filtered=false
+          fi
+
+          updated_at=""
+          if [ -n "$latest" ] && [ -d "/lib/modules/$latest" ]; then
+            updated_at="$(stat -c '%y' "/lib/modules/$latest" 2>/dev/null || true)"
+          fi
+
+          printf 'latest=%s\n' "$latest"
+          printf 'updated_at=%s\n' "$updated_at"
+          printf 'filtered=%s\n' "$filtered"
+  register: linux_vitals_latest_kernel_cmd
   changed_when: false
   failed_when: false
   tags:
@@ -124,10 +147,82 @@
       - |
           sanitize_kernel() {
             kernel_value="$1"
+            # An entry can point at a symlink (Debian's /vmlinuz) or at a path
+            # that is relative to a separate /boot partition -- resolve both
+            # before reducing the path to a bare kernel version.
+            for candidate in "$kernel_value" "/boot$kernel_value"; do
+              if [ -L "$candidate" ]; then
+                resolved_link="$(readlink -f "$candidate" 2>/dev/null || true)"
+                if [ -n "$resolved_link" ]; then
+                  kernel_value="$resolved_link"
+                  break
+                fi
+              fi
+            done
             kernel_value="${kernel_value##*/}"
+            kernel_value="${kernel_value%.efi}"
             kernel_value="${kernel_value#vmlinuz-}"
+            kernel_value="${kernel_value#vmlinux-}"
             kernel_value="${kernel_value#linux-}"
+            kernel_value="${kernel_value#kernel-}"
             printf '%s' "$kernel_value"
+          }
+
+          bls_entry_dirs="/boot/loader/entries /boot/efi/loader/entries /efi/loader/entries"
+
+          # RHEL 8+/Fedora and SUSE with BLS keep boot entries as drop-in files
+          # rather than menuentry blocks, so grub.cfg parsing never sees them.
+          resolve_kernel_from_bls_id() {
+            entry_id="$1"
+            [ -n "$entry_id" ] || return 0
+            for entries_dir in $bls_entry_dirs; do
+              [ -d "$entries_dir" ] || continue
+              for entry_conf in "$entries_dir/$entry_id" "$entries_dir/$entry_id.conf"; do
+                if [ -f "$entry_conf" ]; then
+                  kernel_from_bls_conf "$entry_conf"
+                  return 0
+                fi
+              done
+            done
+          }
+
+          resolve_kernel_from_bls_title() {
+            entry_title="$1"
+            [ -n "$entry_title" ] || return 0
+            for entries_dir in $bls_entry_dirs; do
+              [ -d "$entries_dir" ] || continue
+              for entry_conf in "$entries_dir"/*.conf; do
+                [ -f "$entry_conf" ] || continue
+                conf_title="$(awk '$1 == "title" { $1 = ""; sub(/^[ \t]+/, ""); print; exit }' "$entry_conf")"
+                if [ "$conf_title" = "$entry_title" ]; then
+                  kernel_from_bls_conf "$entry_conf"
+                  return 0
+                fi
+              done
+            done
+          }
+
+          # Type 1 entries carry a `linux` line; unified kernel image (type 2)
+          # entries carry an `efi` line pointing at the bundled image instead.
+          kernel_from_bls_conf() {
+            entry_conf="$1"
+            kernel_line="$(awk '$1 == "linux" { print $2; exit }' "$entry_conf")"
+            if [ -z "$kernel_line" ]; then
+              kernel_line="$(awk '$1 == "efi" { print $2; exit }' "$entry_conf")"
+            fi
+            printf '%s' "$kernel_line"
+          }
+
+          resolve_kernel_from_any_entry() {
+            entry_reference="$1"
+            resolved_from_entry="$(resolve_kernel_from_bls_id "$entry_reference")"
+            if [ -z "$resolved_from_entry" ]; then
+              resolved_from_entry="$(resolve_kernel_from_bls_title "$entry_reference")"
+            fi
+            if [ -z "$resolved_from_entry" ] && [ -n "$grub_cfg" ]; then
+              resolved_from_entry="$(resolve_kernel_from_grubcfg "$entry_reference" "$grub_cfg")"
+            fi
+            printf '%s' "$resolved_from_entry"
           }
 
           # Portable POSIX sh state machine (no gawk-only 3-arg match()) so this
@@ -249,19 +344,16 @@
             saved_entry="$("$grub_editenv_cmd" "$grub_env" list 2>/dev/null | sed -n 's/^saved_entry=//p' | head -n 1)"
             if [ -n "$saved_entry" ]; then
               resolved_kernel=""
-              case "$saved_entry" in
-                *vmlinuz*|*linux*)
-                  resolved_kernel="$(sanitize_kernel "$saved_entry")"
-                  ;;
-                *)
-                  if [ -n "$grub_cfg" ]; then
-                    resolved_path="$(resolve_kernel_from_grubcfg "$saved_entry" "$grub_cfg")"
-                    if [ -n "$resolved_path" ]; then
-                      resolved_kernel="$(sanitize_kernel "$resolved_path")"
-                    fi
-                  fi
-                  ;;
-              esac
+              resolved_path="$(resolve_kernel_from_any_entry "$saved_entry")"
+              if [ -n "$resolved_path" ]; then
+                resolved_kernel="$(sanitize_kernel "$resolved_path")"
+              else
+                case "$saved_entry" in
+                  *vmlinuz*|*linux-*)
+                    resolved_kernel="$(sanitize_kernel "$saved_entry")"
+                    ;;
+                esac
+              fi
               result_status="entry-only"
               if [ -n "$resolved_kernel" ]; then
                 result_status="resolved"
@@ -277,19 +369,16 @@
               resolved_kernel=""
               case "$grub_default_raw" in
                 ''|*[!0-9]*)
-                  case "$grub_default_raw" in
-                    *vmlinuz*|*linux*)
-                      resolved_kernel="$(sanitize_kernel "$grub_default_raw")"
-                      ;;
-                    *)
-                      if [ -n "$grub_cfg" ]; then
-                        resolved_path="$(resolve_kernel_from_grubcfg "$grub_default_raw" "$grub_cfg")"
-                        if [ -n "$resolved_path" ]; then
-                          resolved_kernel="$(sanitize_kernel "$resolved_path")"
-                        fi
-                      fi
-                      ;;
-                  esac
+                  resolved_path="$(resolve_kernel_from_any_entry "$grub_default_raw")"
+                  if [ -n "$resolved_path" ]; then
+                    resolved_kernel="$(sanitize_kernel "$resolved_path")"
+                  else
+                    case "$grub_default_raw" in
+                      *vmlinuz*|*linux-*)
+                        resolved_kernel="$(sanitize_kernel "$grub_default_raw")"
+                        ;;
+                    esac
+                  fi
                   ;;
                 *)
                   if [ -n "$grub_cfg" ]; then
@@ -309,6 +398,39 @@
             fi
           fi
 
+          # systemd-boot: no grub anywhere, the default lives in loader.conf and
+          # may be a glob (systemd-boot then picks the version-highest match).
+          for loader_conf in /boot/loader/loader.conf /boot/efi/loader/loader.conf /efi/loader/loader.conf; do
+            [ -f "$loader_conf" ] || continue
+            entries_dir="${loader_conf%/loader.conf}/entries"
+            default_pattern="$(awk '$1 == "default" { print $2; exit }' "$loader_conf")"
+            if [ -z "$default_pattern" ]; then
+              print_result "true" "systemd-boot" "" "" "entry-only"
+              exit 0
+            fi
+            matched_entry=""
+            if [ -d "$entries_dir" ]; then
+              matched_entry="$(
+                for entry_conf in "$entries_dir"/$default_pattern "$entries_dir"/$default_pattern.conf; do
+                  [ -f "$entry_conf" ] && printf '%s\n' "$entry_conf"
+                done | sort -V -u | tail -n 1
+              )"
+            fi
+            resolved_kernel=""
+            if [ -n "$matched_entry" ]; then
+              resolved_path="$(kernel_from_bls_conf "$matched_entry")"
+              if [ -n "$resolved_path" ]; then
+                resolved_kernel="$(sanitize_kernel "$resolved_path")"
+              fi
+            fi
+            result_status="entry-only"
+            if [ -n "$resolved_kernel" ]; then
+              result_status="resolved"
+            fi
+            print_result "true" "systemd-boot" "$default_pattern" "$resolved_kernel" "$result_status"
+            exit 0
+          done
+
           print_result "false" "unavailable" "" "" "unavailable"
   register: linux_vitals_bootloader_default_cmd
   changed_when: false
@@ -318,9 +440,50 @@
     - kernel
 
 - name: Check if reboot is required on Debian family
-  ansible.builtin.stat:
-    path: /var/run/reboot-required
-  register: linux_vitals_reboot_required_file
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - |
+          # /run is the modern location; /var/run is a compat symlink on
+          # systemd hosts but can still be a real directory elsewhere, so both
+          # are checked. update-notifier-common (Ubuntu) and unattended-upgrades
+          # also drop a .pkgs file naming the packages that asked for a reboot.
+          marker=""
+          for candidate in /run/reboot-required /var/run/reboot-required; do
+            if [ -f "$candidate" ]; then
+              marker="$candidate"
+              break
+            fi
+          done
+
+          packages=""
+          for candidate in /run/reboot-required.pkgs /var/run/reboot-required.pkgs; do
+            if [ -f "$candidate" ] && [ -r "$candidate" ]; then
+              packages="$(
+                sort -u "$candidate" 2>/dev/null |
+                  tr -d '\r' |
+                  sed '/^[[:space:]]*$/d' |
+                  tr '\n' ',' |
+                  sed 's/,$//'
+              )"
+              break
+            fi
+          done
+
+          detail=""
+          if [ -n "$marker" ] && [ -r "$marker" ]; then
+            detail="$(head -n 1 "$marker" 2>/dev/null | tr -d '\r')"
+          fi
+
+          printf 'supported=true\n'
+          printf 'detected=%s\n' "$([ -n "$marker" ] && printf 'true' || printf 'false')"
+          printf 'source=%s\n' "$([ -n "$marker" ] && printf '%s' "$marker" || printf 'reboot-required-file')"
+          printf 'detail=%s\n' "$detail"
+          printf 'packages=%s\n' "$packages"
+  register: linux_vitals_debian_reboot_cmd
+  changed_when: false
+  failed_when: false
   when: ansible_facts['os_family'] == 'Debian'
   tags:
     - discovery
@@ -329,9 +492,61 @@
 - name: Check if reboot is recommended on RedHat family
   ansible.builtin.command:
     argv:
-      - needs-restarting
-      - -r
-  register: linux_vitals_needs_restarting_cmd
+      - sh
+      - -c
+      - |
+          # `needs-restarting -r` exits 0 (no reboot needed) or 1 (reboot
+          # needed); anything else means the check itself failed and must not
+          # be read as "no reboot needed". The standalone binary ships in
+          # dnf-utils/yum-utils; on dnf5 hosts (Fedora 41+) the same check is
+          # only reachable as a dnf subcommand.
+          probe_output=""
+          probe_rc=0
+          probe_source=""
+
+          if command -v needs-restarting >/dev/null 2>&1; then
+            probe_output="$(needs-restarting -r 2>&1)"
+            probe_rc=$?
+            probe_source="needs-restarting"
+          elif command -v dnf >/dev/null 2>&1 &&
+               dnf needs-restarting --help >/dev/null 2>&1; then
+            # The --help gate matters: dnf4 without the plugin exits 1 for an
+            # unknown command, which is exactly the "reboot needed" code.
+            probe_output="$(dnf --quiet needs-restarting --reboothint 2>&1)"
+            probe_rc=$?
+            probe_source="dnf-needs-restarting"
+          fi
+
+          if [ -z "$probe_source" ]; then
+            printf 'supported=false\n'
+            printf 'detected=false\n'
+            printf 'source=needs-restarting-missing\n'
+            printf 'detail=needs-restarting is not installed (dnf-utils/yum-utils)\n'
+            printf 'packages=\n'
+            exit 0
+          fi
+
+          detail="$(printf '%s' "$probe_output" | sed '/^[[:space:]]*$/d' | tail -n 1)"
+
+          case "$probe_rc" in
+            0)
+              printf 'supported=true\n'
+              printf 'detected=false\n'
+              ;;
+            1)
+              printf 'supported=true\n'
+              printf 'detected=true\n'
+              ;;
+            *)
+              printf 'supported=false\n'
+              printf 'detected=false\n'
+              detail="$probe_source exited $probe_rc: $detail"
+              ;;
+          esac
+          printf 'source=%s\n' "$probe_source"
+          printf 'detail=%s\n' "$detail"
+          printf 'packages=\n'
+  register: linux_vitals_redhat_reboot_cmd
   changed_when: false
   failed_when: false
   when: ansible_facts['os_family'] == 'RedHat'
@@ -340,9 +555,48 @@
     - kernel
 
 - name: Check if reboot is recommended on SUSE family
-  ansible.builtin.stat:
-    path: /var/run/reboot-needed
-  register: linux_vitals_suse_reboot_file
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - |
+          # zypper 1.14.44+ answers this directly: exit 0 means no reboot is
+          # needed, 102 (ZYPPER_EXIT_INF_REBOOT_NEEDED) means one is. Older
+          # zypper rejects the subcommand, so fall back to the marker files
+          # written by the zypper plugin / transactional-update.
+          if command -v zypper >/dev/null 2>&1; then
+            zypper --non-interactive needs-rebooting >/dev/null 2>&1
+            zypper_rc=$?
+            case "$zypper_rc" in
+              0)
+                printf 'supported=true\ndetected=false\nsource=zypper-needs-rebooting\ndetail=\npackages=\n'
+                exit 0
+                ;;
+              102)
+                printf 'supported=true\ndetected=true\nsource=zypper-needs-rebooting\n'
+                printf 'detail=zypper reports core libraries or the kernel were updated\n'
+                printf 'packages=\n'
+                exit 0
+                ;;
+            esac
+          fi
+
+          marker=""
+          for candidate in /run/reboot-needed /var/run/reboot-needed /run/reboot-required /var/run/reboot-required; do
+            if [ -f "$candidate" ]; then
+              marker="$candidate"
+              break
+            fi
+          done
+
+          printf 'supported=true\n'
+          printf 'detected=%s\n' "$([ -n "$marker" ] && printf 'true' || printf 'false')"
+          printf 'source=%s\n' "$([ -n "$marker" ] && printf '%s' "$marker" || printf 'reboot-needed-file')"
+          printf 'detail=\n'
+          printf 'packages=\n'
+  register: linux_vitals_suse_reboot_cmd
+  changed_when: false
+  failed_when: false
   when: ansible_facts['os_family'] == 'Suse'
   tags:
     - discovery
@@ -480,12 +734,35 @@
         ) ~ 'm'
       }}
     linux_vitals_running_kernel: "{{ ansible_facts['kernel'] | default('unknown') }}"
-    linux_vitals_latest_installed_kernel: "{{ linux_vitals_latest_kernel_cmd.stdout | default('unknown') | trim }}"
-    linux_vitals_latest_kernel_updated_at: "{{ linux_vitals_latest_kernel_timestamp_cmd.stdout | default('unknown') | trim }}"
+    linux_vitals_latest_installed_kernel: >-
+      {{
+        linux_vitals_latest_kernel_cmd.stdout
+        | default('')
+        | regex_findall('(?m)^latest=(.*)$')
+        | first
+        | default('', true)
+        | trim
+        | default('unknown', true)
+      }}
+    linux_vitals_latest_kernel_updated_at: >-
+      {{
+        linux_vitals_latest_kernel_cmd.stdout
+        | default('')
+        | regex_findall('(?m)^updated_at=(.*)$')
+        | first
+        | default('', true)
+        | trim
+        | default('unknown', true)
+      }}
     linux_vitals_latest_kernel_selected: >-
       {{
         (
-          linux_vitals_latest_kernel_cmd.stdout | default('') | trim
+          linux_vitals_latest_kernel_cmd.stdout
+          | default('')
+          | regex_findall('(?m)^latest=(.*)$')
+          | first
+          | default('')
+          | trim
         ) == (
           ansible_facts['kernel'] | default('') | trim
         )
@@ -532,18 +809,15 @@
         | default('unavailable')
         | trim
       }}
-    linux_vitals_reboot_required: >-
+    linux_vitals_reboot_probe_output: >-
       {{
-        (
-          linux_vitals_reboot_required_file.stat.exists | default(false)
-        ) if ansible_facts['os_family'] == 'Debian'
-        else (
-          linux_vitals_needs_restarting_cmd.rc | default(1)
-        ) == 1 if ansible_facts['os_family'] == 'RedHat'
-        else (
-          linux_vitals_suse_reboot_file.stat.exists | default(false)
-        ) if ansible_facts['os_family'] == 'Suse'
-        else not linux_vitals_latest_kernel_selected
+        linux_vitals_debian_reboot_cmd.stdout | default('')
+        if ansible_facts['os_family'] == 'Debian'
+        else linux_vitals_redhat_reboot_cmd.stdout | default('')
+        if ansible_facts['os_family'] == 'RedHat'
+        else linux_vitals_suse_reboot_cmd.stdout | default('')
+        if ansible_facts['os_family'] == 'Suse'
+        else ''
       }}
     linux_vitals_selinux_status: "{{ linux_vitals_selinux_cmd.stdout | default('not-installed') | trim }}"
     linux_vitals_apparmor_status: >-
@@ -590,6 +864,12 @@
     - security
     - boot
 
+- name: Derive reboot requirement facts
+  ansible.builtin.include_tasks: reboot_facts.yml
+  tags:
+    - discovery
+    - kernel
+
 - name: Finalize bootloader default-kernel match fact
   ansible.builtin.set_fact:
     linux_vitals_bootloader_default_matches_latest: >-
@@ -597,6 +877,9 @@
         linux_vitals_bootloader_default_status == 'resolved'
         and linux_vitals_bootloader_default_kernel == linux_vitals_latest_installed_kernel
       }}
+  tags:
+    - discovery
+    - kernel
 
 - name: Finalize bootloader validation message
   ansible.builtin.set_fact:
@@ -611,6 +894,9 @@
         if linux_vitals_bootloader_default_status == 'entry-only'
         else 'Bootloader default kernel validation is not available on this host'
       }}
+  tags:
+    - discovery
+    - kernel
 
 - name: Build boot partition facts
   ansible.builtin.set_fact:

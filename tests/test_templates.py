@@ -71,7 +71,7 @@ def test_templates_render_with_representative_health_data(tmp_path: Path) -> Non
     assert generic_webhook["summary"]["overall_status"] == "PASS"
     assert generic_webhook["hosts"][0]["hostname"] == "localhost"
     assert "Standard Maintenance Summary" in generic_webhook["message"]
-    assert json_report["schema_version"] == "1.1"
+    assert json_report["schema_version"] == "1.2"
     assert json_report["summary"]["health_score_pct"] == 100.0
     assert json_report["hosts"][0]["asset_serial"] == "TEST-SERIAL-0001"
     assert json_report["hosts"][0]["comparison"]["baseline_available"] is False
@@ -79,6 +79,11 @@ def test_templates_render_with_representative_health_data(tmp_path: Path) -> Non
     assert json_report["summary"]["overall_status"] == "PASS"
     assert json_report["hosts"][0]["kernel"]["running"] == "6.8.0-test"
     assert json_report["hosts"][0]["reboot"]["required"] is False
+    assert json_report["hosts"][0]["reboot"]["source"] == "reboot-required-file"
+    assert json_report["hosts"][0]["reboot"]["detection_supported"] is True
+    assert json_report["hosts"][0]["reboot"]["pending_packages"] == []
+    assert generic_webhook["hosts"][0]["reboot_required_source"] == "reboot-required-file"
+    assert "Reboot: No (reboot-required-file)" in slack
     assert json_report["hosts"][0]["security"]["apparmor_status"] == "enabled"
 
 

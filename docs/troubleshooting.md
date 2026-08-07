@@ -59,8 +59,17 @@ ANSIBLE_LOCAL_TEMP=/tmp/ansible-local ANSIBLE_REMOTE_TEMP=/tmp/ansible-remote \
 **Bootloader validation shows "not available on this host".**
 This is expected on hosts without GRUB (some cloud images boot via direct
 kernel/EFI stub), or if none of `grubby`, `grub2-editenv`/`grub-editenv`,
-or `/etc/default/grub` are present/readable. It degrades gracefully rather
-than failing the run.
+`/etc/default/grub`, or a systemd-boot `loader.conf` are present/readable.
+It degrades gracefully rather than failing the run -- see
+[kernel-reboot-detection.md](kernel-reboot-detection.md#known-edge-cases).
+
+**A host's reboot status shows "no distro check".**
+The distro's own reboot check couldn't answer -- usually `needs-restarting`
+isn't installed (`dnf install dnf-utils`), or zypper is older than 1.14.44.
+That host's `reboot_required` comes from comparing the running kernel with
+the latest installed one instead, and `reboot_required_source` reports
+`kernel-comparison`. See
+[kernel-reboot-detection.md](kernel-reboot-detection.md).
 
 **A finding fires that you don't expect.**
 See [report-guide.md#findings](report-guide.md#findings) for the exact

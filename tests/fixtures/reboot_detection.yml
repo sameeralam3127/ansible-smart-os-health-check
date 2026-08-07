@@ -1,0 +1,87 @@
+---
+- name: Derive reboot requirement facts from representative distro probe output
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    output_dir: "{{ lookup('ansible.builtin.env', 'TEST_OUTPUT_DIR') }}"
+    scenario_results: {}
+    scenarios:
+      # Ubuntu/Debian: marker file present, with the packages that asked for it.
+      - name: debian_pending
+        latest_kernel_selected: true
+        probe: |
+          supported=true
+          detected=true
+          source=/run/reboot-required
+          detail=*** System restart required ***
+          packages=libc6,linux-image-6.8.0-60-generic
+      # Debian with no marker file: the check ran and answered "no".
+      - name: debian_clear
+        latest_kernel_selected: true
+        probe: |
+          supported=true
+          detected=false
+          source=reboot-required-file
+          detail=
+          packages=
+      # RHEL/Fedora with dnf-utils installed: needs-restarting -r exited 1.
+      - name: redhat_pending
+        latest_kernel_selected: false
+        probe: |
+          supported=true
+          detected=true
+          source=needs-restarting
+          detail=Reboot is required to fully utilize these updates.
+          packages=
+      # RHEL minimal image without dnf-utils: fall back to kernel comparison.
+      - name: redhat_tool_missing
+        latest_kernel_selected: false
+        probe: |
+          supported=false
+          detected=false
+          source=needs-restarting-missing
+          detail=needs-restarting is not installed (dnf-utils/yum-utils)
+          packages=
+      # needs-restarting exited non-zero for its own reasons -- an unusable
+      # answer must never be reported as "no reboot needed".
+      - name: redhat_tool_failed
+        latest_kernel_selected: true
+        probe: |
+          supported=false
+          detected=false
+          source=needs-restarting
+          detail=needs-restarting exited 2: Permission denied
+          packages=
+      # SUSE with a modern zypper answering the question directly.
+      - name: suse_pending
+        latest_kernel_selected: true
+        probe: |
+          supported=true
+          detected=true
+          source=zypper-needs-rebooting
+          detail=zypper reports core libraries or the kernel were updated
+          packages=
+      # Host family with no distro-specific check at all.
+      - name: unsupported_family
+        latest_kernel_selected: true
+        probe: ""
+  tasks:
+    - name: Ensure temporary test output directory exists
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Evaluate every reboot detection scenario
+      ansible.builtin.include_tasks: reboot_scenario.yml
+      loop: "{{ scenarios }}"
+      loop_control:
+        loop_var: scenario
+        label: "{{ scenario.name }}"
+
+    - name: Write derived reboot facts for assertion
+      ansible.builtin.copy:
+        content: "{{ scenario_results | to_nice_json }}\n"
+        dest: "{{ output_dir }}/reboot_detection.json"
+        mode: "0644"

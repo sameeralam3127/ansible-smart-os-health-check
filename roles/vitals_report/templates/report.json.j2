@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "generated_at": {{ linux_vitals_effective_archive_timestamp | default(now(utc=true, fmt='%Y%m%dT%H%M%SZ')) | to_json }},
   "report": {
     "title": {{ linux_vitals_report_title | to_json }},
@@ -61,7 +61,11 @@
         "validation_message": {{ result.bootloader_validation_message | to_json }}
       },
       "reboot": {
-        "required": {{ result.reboot_required | to_json }}
+        "required": {{ result.reboot_required | to_json }},
+        "detection_supported": {{ result.reboot_detection_supported | default(true) | to_json }},
+        "source": {{ result.reboot_required_source | default('unavailable') | to_json }},
+        "pending_packages": {{ result.reboot_required_packages | default([]) | to_json }},
+        "reason": {{ result.reboot_reason | default('') | to_json }}
       },
       "security": {
         "selinux_status": {{ result.selinux_status | to_json }},

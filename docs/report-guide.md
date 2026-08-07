@@ -57,12 +57,12 @@ keep the working view small even when the underlying table is large.
 
 ## JSON report
 
-`reports/linux_vitals_report.json` -- schema `1.1`, intended for ingestion
+`reports/linux_vitals_report.json` -- schema `1.2`, intended for ingestion
 by log shippers, SIEMs, or your own dashboards.
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "generated_at": "20260712T120000Z",
   "report": { "title": "...", "html_output_path": "...", "json_output_path": "..." },
   "maintenance": { "phase": "postcheck", "maintenance_id": "2026-07-12-patch-window" },
@@ -89,7 +89,7 @@ by log shippers, SIEMs, or your own dashboards.
       "platform": { "type": "Virtual Machine", "virtualization_type": "kvm", "uptime": "12d 4h 21m", "last_reboot": "2026-06-30 08:15" },
       "kernel": { "running": "6.8.0-60-generic", "latest_installed": "6.8.0-60-generic", "latest_selected": true, "install_failures": 0, "install_failure_excerpt": [] },
       "bootloader": { "supported": true, "default_status": "resolved", "default_matches_latest": true, "validation_message": "Default boot entry selects the latest installed kernel" },
-      "reboot": { "required": false },
+      "reboot": { "required": false, "detection_supported": true, "source": "reboot-required-file", "pending_packages": [], "reason": "No reboot required (reboot-required-file)" },
       "security": { "selinux_status": "not-installed", "apparmor_status": "enabled", "failed_login_count": 0, "last_failed_login": "No failed login attempts found" },
       "boot_space": { "mount": "/boot", "free_pct": 65.3, "status": "Healthy", "rescue_image_available": true, "rescue_image_paths": ["..."] },
       "memory": { "status": "OK", "used_pct": 42.5, "used_mb": 3480.0, "total_mb": 8192.0 },
@@ -128,9 +128,11 @@ A host's `final_status` is `Fail` if any of these fire (see
   window)
 - `sssd`, `systemd-journald`, or the resolved time-sync service isn't
   running (or no time-sync service is installed at all)
-- A system reboot is required (per-distro detection: `/var/run/reboot-required`
-  on Debian, `needs-restarting -r` on RedHat, `/var/run/reboot-needed` on
-  SUSE)
+- A system reboot is required -- per-distro detection (`/run/reboot-required`
+  on Debian, `needs-restarting -r` on RedHat, `zypper needs-rebooting` on
+  SUSE), falling back to a running-vs-latest kernel comparison where no distro
+  check is available; see
+  [kernel-reboot-detection.md](kernel-reboot-detection.md)
 - The running kernel isn't the latest installed one
 - The default boot entry doesn't select the latest installed kernel
   (when bootloader validation is available)
