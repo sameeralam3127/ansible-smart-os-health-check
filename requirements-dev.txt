@@ -2,3 +2,6 @@ ansible-core>=2.16,<2.21
 ansible-lint>=24.0.0
 pytest>=8.0.0
 PyYAML>=6.0
+molecule>=25.0.0
+# community.docker's docker_container module needs the Docker SDK for Python
+docker>=7.1.0

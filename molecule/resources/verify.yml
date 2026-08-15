@@ -1,0 +1,160 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    molecule_report_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/reports"
+  tasks:
+    - name: Read the generated JSON report
+      ansible.builtin.slurp:
+        src: "{{ molecule_report_dir }}/linux_vitals_report.json"
+      delegate_to: localhost
+      register: json_report_raw
+
+    - name: Read the generated HTML dashboard
+      ansible.builtin.slurp:
+        src: "{{ molecule_report_dir }}/linux_vitals_report.html"
+      delegate_to: localhost
+      register: html_report_raw
+
+    - name: Decode the reports
+      ansible.builtin.set_fact:
+        report: "{{ json_report_raw.content | b64decode | from_json }}"
+        dashboard: "{{ html_report_raw.content | b64decode }}"
+
+    - name: Select this host's entry from the report
+      ansible.builtin.set_fact:
+        host_report: >-
+          {{
+            report.hosts
+            | selectattr('inventory_name', 'equalto', inventory_hostname)
+            | list
+            | first
+          }}
+
+    # ------------------------------------------------------------------
+    # Discovery
+    # ------------------------------------------------------------------
+    - name: Assert discovery identified the platform correctly
+      ansible.builtin.assert:
+        that:
+          - report.schema_version == '1.2'
+          - host_report.os.family == vitals_expected_os_family
+          - host_report.os.package_manager == vitals_expected_package_manager
+          - host_report.os.log_source == 'journald'
+          - host_report.platform.uptime | length > 0
+        fail_msg: >-
+          Expected {{ vitals_expected_os_family }}/{{ vitals_expected_package_manager }},
+          got {{ host_report.os }}
+
+    - name: Assert discovery collected memory, kernel and service state
+      ansible.builtin.assert:
+        that:
+          - host_report.memory.total_mb | float > 0
+          - host_report.memory.status in ['OK', 'Warning', 'Critical']
+          - host_report.kernel.running | length > 0
+          - host_report.boot_space.status in ['Healthy', 'Low', 'Not Available']
+          - host_report.security.selinux_status | length > 0
+
+    - name: Assert the time synchronization service was resolved and is up
+      ansible.builtin.assert:
+        that:
+          - "'chronyd or ntp is not installed' not in host_report.findings"
+          - "'Time synchronization service is not active' not in host_report.findings"
+        fail_msg: "Time sync findings fired unexpectedly: {{ host_report.findings }}"
+
+    # ------------------------------------------------------------------
+    # Reboot detection (per-distro, see docs/kernel-reboot-detection.md)
+    # ------------------------------------------------------------------
+    - name: Assert reboot detection used a source this distro can provide
+      ansible.builtin.assert:
+        that:
+          - host_report.reboot.source in vitals_expected_reboot_sources
+          - host_report.reboot.required in [true, false]
+          - host_report.reboot.reason | length > 0
+        fail_msg: >-
+          Reboot source {{ host_report.reboot.source }} is not one of
+          {{ vitals_expected_reboot_sources }}
+
+    # ------------------------------------------------------------------
+    # Self-healing
+    # ------------------------------------------------------------------
+    - name: Assert the healable service was restarted and reported as fixed
+      ansible.builtin.assert:
+        that:
+          - "'molecule-flaky.service' in host_report.self_healing.services_healed"
+          - healed_flaky.result == 'Fixed'
+          - report.summary.auto_fixed_count | int >= 1
+        fail_msg: "Self-healing outcomes: {{ host_report.self_healing }}"
+      vars:
+        healed_flaky: >-
+          {{
+            host_report.self_healing.healing_results
+            | selectattr('service', 'equalto', 'molecule-flaky.service')
+            | list
+            | first
+          }}
+
+    - name: Assert the unfixable service was reported for manual follow-up
+      ansible.builtin.assert:
+        that:
+          - broken_result.result != 'Fixed'
+          - "'molecule-broken.service requires manual follow-up' in host_report.findings"
+        fail_msg: "Self-healing outcomes: {{ host_report.self_healing }}"
+      vars:
+        broken_result: >-
+          {{
+            host_report.self_healing.healing_results
+            | selectattr('service', 'equalto', 'molecule-broken.service')
+            | list
+            | first
+          }}
+
+    - name: Assert the healed unit is actually running on the host
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - molecule-flaky.service
+      register: flaky_state
+      changed_when: false
+      failed_when: flaky_state.stdout | trim != 'active'
+
+    - name: Assert the unfixable unit is still failed on the host
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-failed
+          - molecule-broken.service
+      register: broken_state
+      changed_when: false
+      failed_when: broken_state.stdout | trim != 'failed'
+
+    # ------------------------------------------------------------------
+    # Reporting
+    # ------------------------------------------------------------------
+    - name: Assert the JSON report summarises the run
+      ansible.builtin.assert:
+        that:
+          - report.summary.servers_checked | int == 1
+          - report.summary.overall_status in ['PASS', 'FAIL']
+          - report.maintenance.phase == 'adhoc'
+          - host_report.status in ['Pass', 'Fail']
+          - host_report.hostname | length > 0
+
+    - name: Assert the HTML dashboard rendered this host
+      ansible.builtin.assert:
+        that:
+          - "'LinuxVitals Molecule Dashboard' in dashboard"
+          - inventory_hostname in dashboard
+          - "'molecule-flaky.service' in dashboard"
+
+    - name: Assert the run was archived
+      # Snapshots are only written for the baseline/postcheck phases, so an
+      # adhoc converge should leave a timestamped HTML archive and nothing else.
+      ansible.builtin.find:
+        paths: "{{ molecule_report_dir }}/archive"
+        patterns: "linux_vitals_report-*.html"
+      delegate_to: localhost
+      register: archived_reports
+      failed_when: archived_reports.matched < 1

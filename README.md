@@ -30,6 +30,7 @@ Collection: `sameeralam3127.linux_vitals`
 - [Examples](docs/examples.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Architecture](docs/architecture.md)
+- [Testing](docs/testing.md) -- unit tests and the per-distro Molecule scenarios
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 

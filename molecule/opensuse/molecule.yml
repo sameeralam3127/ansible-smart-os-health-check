@@ -1,0 +1,66 @@
+---
+# openSUSE Leap 15. There is no maintained systemd+Ansible image from the same
+# publisher as the others, so this scenario uses the Chef dokken image (systemd as
+# PID 1, no Python) and bootstraps Python in prepare.yml -- see docs/testing.md.
+# Molecule's prerun installer would try to install this collection into the
+# first entry of ansible.cfg's collections_path, which is the .dev-collections
+# symlink back to this repo -- it cannot write through that. The symlink is
+# what makes FQCN roles resolve here anyway, so the prerun step is not needed.
+prerun: false
+
+dependency:
+  name: galaxy
+
+driver:
+  name: default
+  options:
+    managed: true
+    login_cmd_template: "docker exec -it {instance} /bin/sh"
+
+platforms:
+  - name: linux-vitals-opensuse
+    image: dokken/opensuse-leap-15:latest
+
+provisioner:
+  name: ansible
+  env:
+    # Mirrors ansible.cfg's collections_path: the repo-local symlink that
+    # create.yml maintains, then the galaxy dependency's install location.
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.dev-collections:~/.ansible/collections"
+  playbooks:
+    create: ../resources/create.yml
+    destroy: ../resources/destroy.yml
+    prepare: ../resources/prepare.yml
+    converge: ../resources/converge.yml
+    verify: ../resources/verify.yml
+  inventory:
+    host_vars:
+      linux-vitals-opensuse:
+        ansible_python_interpreter: /usr/bin/python3.11
+        vitals_python_interpreter: /usr/bin/python3.11
+        vitals_python_package: python311
+        vitals_expected_os_family: Suse
+        vitals_expected_package_manager: zypper
+        vitals_expected_reboot_sources:
+          - "zypper-needs-rebooting"
+        vitals_test_time_sync_service: chronyd.service
+        vitals_test_packages:
+          - chrony
+        vitals_test_optional_packages: []
+
+verifier:
+  name: ansible
+
+scenario:
+  name: opensuse
+  # No idempotence step: every run renders a freshly timestamped report, so the
+  # reporting role is changed by design on a second pass.
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy

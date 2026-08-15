@@ -1,6 +1,6 @@
 namespace: sameeralam3127
 name: linux_vitals
-version: 1.1.0
+version: 1.2.0
 readme: README.md
 authors:
   - Sameer Alam <sameeralam3127@gmail.com>
@@ -50,6 +50,7 @@ build_ignore:
   - requirements.yml
   - pytest.ini
   - tests
+  - molecule
   - .pytest_cache
   - .DS_Store
 

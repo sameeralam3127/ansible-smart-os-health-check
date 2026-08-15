@@ -20,7 +20,10 @@ flowchart LR
 - **`vitals_heal`** is entirely gated by `linux_vitals_heal_enabled`
   (default `false`). When enabled, it attempts exactly one restart per
   systemd-enabled service found in a `failed` state, then re-checks the
-  required-service status so the result reflects the post-restart state.
+  required-service status and rebuilds `vitals_scan`'s `linux_vitals_result`
+  so the report reflects the post-restart state -- the result object is built
+  before this role runs, so without that rebuild the healing outcomes would
+  never reach the dashboard.
   When disabled, its tasks are skipped but its role defaults still load, so
   `linux_vitals_heal_enabled` is always defined regardless of whether the
   role is present in a given play.

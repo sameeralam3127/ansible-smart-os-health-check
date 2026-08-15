@@ -1,0 +1,140 @@
+---
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  vars:
+    flaky_marker: /run/molecule-flaky-fail
+  tasks:
+    - name: Ensure a Python interpreter Ansible can use is installed
+      # Some base images ship without Python (openSUSE Leap), or only with one
+      # too old for ansible-core (Leap's default python3 is 3.6), so this has to
+      # run over raw before any module or fact gathering can work.
+      ansible.builtin.raw: |
+        set -e
+        if ! command -v {{ vitals_python_interpreter }} >/dev/null 2>&1; then
+          if command -v zypper >/dev/null 2>&1; then
+            zypper --non-interactive --gpg-auto-import-keys install {{ vitals_python_package }}
+          elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y {{ vitals_python_package }}
+          elif command -v apt-get >/dev/null 2>&1; then
+            apt-get update && apt-get install -y {{ vitals_python_package }}
+          fi
+        fi
+        command -v {{ vitals_python_interpreter }}
+      changed_when: false
+
+    - name: Gather facts now that Python is present
+      ansible.builtin.setup:
+
+    - name: Refresh the apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Install the packages the health checks look for
+      ansible.builtin.package:
+        name: "{{ vitals_test_packages }}"
+        state: present
+
+    - name: Install optional per-release packages
+      # Package names for the reboot-hint tooling move between releases
+      # (yum-utils -> dnf-utils -> dnf5-plugins), so a miss here degrades the
+      # scenario to the kernel-comparison fallback instead of failing the run.
+      ansible.builtin.package:
+        name: "{{ vitals_test_optional_packages }}"
+        state: present
+      register: optional_packages
+      failed_when: false
+      changed_when: optional_packages.changed | default(false)
+      when: vitals_test_optional_packages | default([]) | length > 0
+
+    - name: Enable the time synchronization service
+      ansible.builtin.systemd_service:
+        name: "{{ vitals_test_time_sync_service }}"
+        enabled: true
+        state: started
+
+    - name: Install the flaky test service script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/molecule-flaky
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          # Fails while the marker file exists. Prepare starts it with the
+          # marker in place (so systemd records a failed, enabled unit) and
+          # then removes it, giving vitals_heal a service it can genuinely fix.
+          if [ -f {{ flaky_marker }} ]; then
+            exit 1
+          fi
+          exec sleep infinity
+
+    - name: Install the test units
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        mode: "0644"
+        content: |
+          [Unit]
+          Description={{ item.description }}
+
+          [Service]
+          Type=simple
+          ExecStart={{ item.exec_start }}
+          Restart=no
+
+          [Install]
+          WantedBy=multi-user.target
+      loop:
+        - name: molecule-flaky.service
+          description: LinuxVitals test service that can be healed
+          exec_start: /usr/local/bin/molecule-flaky
+        - name: molecule-broken.service
+          description: LinuxVitals test service that cannot be healed
+          exec_start: /bin/false
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Enable the test units without starting them
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: true
+        daemon_reload: true
+      loop:
+        - molecule-flaky.service
+        - molecule-broken.service
+
+    - name: Arm the flaky service so its first start fails
+      ansible.builtin.file:
+        path: "{{ flaky_marker }}"
+        state: touch
+        mode: "0644"
+
+    - name: Start the test units so systemd records them as failed
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - start
+          - "{{ item }}"
+      loop:
+        - molecule-flaky.service
+        - molecule-broken.service
+      changed_when: true
+      failed_when: false
+
+    - name: Assert both test units are in a failed state
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-failed
+          - "{{ item }}"
+      register: unit_state
+      changed_when: false
+      failed_when: unit_state.stdout | trim != 'failed'
+      loop:
+        - molecule-flaky.service
+        - molecule-broken.service
+
+    - name: Disarm the flaky service so a restart can succeed
+      ansible.builtin.file:
+        path: "{{ flaky_marker }}"
+        state: absent

@@ -5,8 +5,11 @@ Opt-in, one-shot self-healing role, part of the
 (`sameeralam3127.linux_vitals`).
 
 Attempts exactly one restart per systemd-enabled service found in a
-`failed` state, then re-checks the required-service status so downstream
-reporting reflects the post-restart state. Entirely gated by
+`failed` state, then re-checks the required-service status and rebuilds
+`vitals_scan`'s result so downstream reporting reflects the post-restart
+state. Failed units are identified from `service_facts` (which reports them
+as `state: stopped`, `status: failed`) and filtered to the enabled ones with
+`systemctl is-enabled`. Entirely gated by
 `linux_vitals_heal_enabled` (default `false`) -- with it left at the
 default, this role's tasks are skipped and nothing on managed hosts
 changes.
