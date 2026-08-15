@@ -27,11 +27,11 @@ tags:
 
 repository: https://github.com/sameeralam3127/linux-vitals
 documentation: https://github.com/sameeralam3127/linux-vitals/tree/main/docs
-homepage: https://github.com/sameeralam3127/linux-vitals
+homepage: https://sameeralam3127.github.io/linux-vitals/
 issues: https://github.com/sameeralam3127/linux-vitals/issues
 
 build_ignore:
-  - '*.tar.gz'
+  - "*.tar.gz"
   - .github
   - .gitignore
   - .ansible-lint
@@ -42,7 +42,7 @@ build_ignore:
   - .ansible
   - venv
   - .dev-collections
-  - '*.retry'
+  - "*.retry"
   - reports
   - inventory
   - ansible.cfg

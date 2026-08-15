@@ -1,0 +1,6 @@
+---
+# Collections the Molecule harness itself needs (not runtime dependencies
+# of the roles -- those live in requirements.yml).
+collections:
+  - name: community.docker
+    version: ">=3.10.0"

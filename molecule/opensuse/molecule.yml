@@ -10,6 +10,11 @@ prerun: false
 
 dependency:
   name: galaxy
+  options:
+    # Path is relative to the project directory, which is Molecule's working
+    # directory. CI installs the same file explicitly for both jobs.
+    requirements-file: molecule/collections.yml
+    role-file: molecule/requirements.yml
 
 driver:
   name: default

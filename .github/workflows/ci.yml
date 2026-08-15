@@ -29,6 +29,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
           ansible-galaxy collection install -r requirements.yml
+          ansible-galaxy collection install -r molecule/collections.yml
 
       - name: Symlink repository as the sameeralam3127.linux_vitals collection
         run: |
@@ -72,6 +73,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
           ansible-galaxy collection install -r requirements.yml
+          ansible-galaxy collection install -r molecule/collections.yml
 
       - name: Run the ${{ matrix.scenario }} scenario
         run: molecule test -s ${{ matrix.scenario }}
