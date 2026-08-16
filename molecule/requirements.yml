@@ -1,0 +1,5 @@
+---
+# No standalone roles are needed by the harness -- this file exists so the
+# galaxy dependency step does not warn about a missing roles requirements
+# file. Collections live in collections.yml.
+roles: []

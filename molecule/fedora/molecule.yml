@@ -1,0 +1,73 @@
+---
+# Fedora tracks the newest dnf5/systemd behaviour ahead of RHEL.
+# Molecule's prerun installer would try to install this collection into the
+# first entry of ansible.cfg's collections_path, which is the .dev-collections
+# symlink back to this repo -- it cannot write through that. The symlink is
+# what makes FQCN roles resolve here anyway, so the prerun step is not needed.
+prerun: false
+
+dependency:
+  name: galaxy
+  options:
+    # Path is relative to the project directory, which is Molecule's working
+    # directory. CI installs the same file explicitly for both jobs.
+    requirements-file: molecule/collections.yml
+    role-file: molecule/requirements.yml
+
+driver:
+  name: default
+  options:
+    managed: true
+    login_cmd_template: "docker exec -it {instance} /bin/sh"
+
+platforms:
+  - name: linux-vitals-fedora
+    image: geerlingguy/docker-fedora42-ansible:latest
+
+provisioner:
+  name: ansible
+  env:
+    # Mirrors ansible.cfg's collections_path: the repo-local symlink that
+    # create.yml maintains, then the galaxy dependency's install location.
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.dev-collections:~/.ansible/collections"
+  playbooks:
+    create: ../resources/create.yml
+    destroy: ../resources/destroy.yml
+    prepare: ../resources/prepare.yml
+    converge: ../resources/converge.yml
+    verify: ../resources/verify.yml
+  inventory:
+    host_vars:
+      linux-vitals-fedora:
+        ansible_python_interpreter: /usr/bin/python3
+        vitals_python_interpreter: /usr/bin/python3
+        vitals_python_package: python3
+        vitals_expected_os_family: RedHat
+        vitals_expected_package_manager: dnf
+        vitals_expected_reboot_sources:
+          - "needs-restarting"
+          - "dnf-needs-restarting"
+        vitals_expect_time_sync_active: true
+        vitals_test_time_sync_service: chronyd.service
+        vitals_test_packages:
+          - chrony
+        vitals_test_optional_packages:
+          - dnf5-plugins
+
+verifier:
+  name: ansible
+
+scenario:
+  name: fedora
+  # No syntax step: it would run before create, which is what makes the
+  # repo resolvable as a collection -- ansible-lint covers syntax anyway.
+  # No idempotence step: every run renders a freshly timestamped report, so the
+  # reporting role is changed by design on a second pass.
+  test_sequence:
+    - dependency
+    - destroy
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy

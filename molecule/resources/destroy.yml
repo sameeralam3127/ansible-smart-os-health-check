@@ -1,0 +1,23 @@
+---
+- name: Destroy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Remove the test containers
+      community.docker.docker_container:
+        name: "{{ item.name }}"
+        state: absent
+        force_kill: true
+      loop: "{{ molecule_yml.platforms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Empty the instance config
+      ansible.builtin.copy:
+        content: |
+          # Molecule managed
+
+          []
+        dest: "{{ molecule_instance_config }}"
+        mode: "0600"

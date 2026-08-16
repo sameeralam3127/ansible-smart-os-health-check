@@ -4,16 +4,60 @@
   tags:
     - self_healing
   block:
-    - name: Identify enabled failed services
+    - name: Identify failed services
+      # service_facts describes a failed systemd unit as state "stopped" with
+      # status "failed" -- the unit-file state (enabled/disabled) is replaced by
+      # "failed", so it cannot be used to tell enabled units apart here. Older
+      # ansible-core reported state "failed" instead, so both are accepted.
+      ansible.builtin.set_fact:
+        linux_vitals_failed_services: >-
+          {{
+            (
+              (
+                ansible_facts.services
+                | dict2items
+                | selectattr('value.state', 'defined')
+                | selectattr('value.state', 'equalto', 'failed')
+                | map(attribute='key')
+                | list
+              )
+              + (
+                ansible_facts.services
+                | dict2items
+                | selectattr('value.status', 'defined')
+                | selectattr('value.status', 'equalto', 'failed')
+                | map(attribute='key')
+                | list
+              )
+            )
+            | unique
+            | list
+          }}
+
+    - name: Check whether each failed service is enabled
+      # Asked per unit because service_facts no longer carries the unit-file
+      # state for failed units. `is-enabled` also answers static/indirect/masked
+      # with rc 0, so the answer is read from stdout rather than the exit code.
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-enabled
+          - "{{ item }}"
+      register: linux_vitals_enabled_checks
+      changed_when: false
+      failed_when: false
+      loop: "{{ linux_vitals_failed_services }}"
+      when: ansible_facts['service_mgr'] == 'systemd'
+
+    - name: Keep only the failed services that are enabled at boot
       ansible.builtin.set_fact:
         linux_vitals_failed_enabled_services: >-
           {{
-            ansible_facts.services
-            | dict2items
-            | selectattr('value.state', 'equalto', 'failed')
-            | selectattr('value.status', 'defined')
-            | selectattr('value.status', 'search', 'enabled')
-            | map(attribute='key')
+            linux_vitals_enabled_checks.results
+            | default([])
+            | selectattr('stdout', 'defined')
+            | selectattr('stdout', 'search', '^enabled')
+            | map(attribute='item')
             | list
           }}
 
@@ -42,7 +86,8 @@
           {%- set result = 'Manual Intervention Required' -%}
           {%- elif current.state | default('unknown') in ['running', 'active'] -%}
           {%- set result = 'Fixed' -%}
-          {%- elif current.state | default('unknown') == 'failed' -%}
+          {%- elif current.state | default('unknown') == 'failed'
+                or current.status | default('unknown') == 'failed' -%}
           {%- set result = 'Failed to Fix' -%}
           {%- else -%}
           {%- set result = 'Manual Intervention Required' -%}
@@ -120,3 +165,16 @@
                   {}
                 ).state | default('missing')
               }}
+
+    - name: Rebuild the host health result with the self-healing outcomes
+      # vitals_scan builds linux_vitals_result before this role runs, so at that
+      # point healing_results/services_healed are still empty and the refreshed
+      # service states above have not been re-evaluated. Rebuilding the result
+      # here is what puts the healing outcomes -- and the "requires manual
+      # follow-up" findings -- into the report.
+      ansible.builtin.include_role:
+        name: sameeralam3127.linux_vitals.vitals_scan
+        tasks_from: result.yml
+      when:
+        - linux_vitals_failed_enabled_services | length > 0
+        - linux_vitals_result is defined
