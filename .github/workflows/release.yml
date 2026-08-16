@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to Ansible Galaxy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          ansible-galaxy collection install -r requirements.yml
+          ansible-galaxy collection install -r molecule/collections.yml
+
+      - name: Confirm the Galaxy API key is available
+        env:
+          GALAXY_API_KEY: ${{ secrets.API_KEY }}
+        run: |
+          if [ -z "$GALAXY_API_KEY" ]; then
+            echo "::error::The API_KEY secret is not readable by this job." \
+                 "Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Read the collection version
+        id: collection
+        run: |
+          version=$(python -c "import yaml; print(yaml.safe_load(open('galaxy.yml'))['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Collection version: $version"
+
+      - name: Check the tag matches galaxy.yml
+        # Galaxy versions are immutable, so a tag that disagrees with galaxy.yml
+        # would publish something nobody can correct afterwards.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "${{ steps.collection.outputs.version }}" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match galaxy.yml" \
+                 "version ${{ steps.collection.outputs.version }}."
+            exit 1
+          fi
+
+      - name: Symlink repository as the sameeralam3127.linux_vitals collection
+        run: |
+          mkdir -p .dev-collections/ansible_collections/sameeralam3127
+          ln -sfn "$GITHUB_WORKSPACE" .dev-collections/ansible_collections/sameeralam3127/linux_vitals
+
+      - name: Re-run the fast checks
+        # The Molecule scenarios already ran on main; these are the cheap checks
+        # worth repeating against the exact tree being published.
+        run: |
+          ansible-playbook playbooks/healthcheck.yml --syntax-check
+          ansible-lint roles/ playbooks/ molecule/
+          pytest -q
+
+      - name: Build the collection
+        run: ansible-galaxy collection build --force --output-path dist/
+
+      - name: Publish to Ansible Galaxy
+        env:
+          GALAXY_API_KEY: ${{ secrets.API_KEY }}
+        run: |
+          ansible-galaxy collection publish \
+            "dist/sameeralam3127-linux_vitals-${{ steps.collection.outputs.version }}.tar.gz" \
+            --api-key "$GALAXY_API_KEY"
+
+      - name: Upload the built artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sameeralam3127-linux_vitals-${{ steps.collection.outputs.version }}
+          path: dist/*.tar.gz
