@@ -6,20 +6,32 @@ on:
       - "v*"
   workflow_dispatch:
 
+# Least privilege: publishing needs no repository write access. Actions are
+# pinned to commit SHAs (a tag can be moved; a SHA cannot) and kept current by
+# Dependabot -- see .github/dependabot.yml.
 permissions:
   contents: read
+
+# Galaxy versions are immutable, so two concurrent publishes of the same tag
+# would race to an unrecoverable state.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   publish:
     name: Publish to Ansible Galaxy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -84,7 +96,7 @@ jobs:
             --api-key "$GALAXY_API_KEY"
 
       - name: Upload the built artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sameeralam3127-linux_vitals-${{ steps.collection.outputs.version }}
           path: dist/*.tar.gz

@@ -1,0 +1,78 @@
+---
+name: Bug report
+description: A check reports the wrong thing, a run fails, or a report renders badly
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Found a **security** problem instead? Do not file it here --
+        see [SECURITY.md](https://github.com/sameeralam3127/linux-vitals/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The playbook or command you ran, and any relevant variables.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: collection-version
+    attributes:
+      label: LinuxVitals version
+      description: "`ansible-galaxy collection list sameeralam3127.linux_vitals`"
+      placeholder: "1.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: ansible-version
+    attributes:
+      label: Ansible Core version
+      description: "`ansible --version`"
+      placeholder: "2.18.1"
+    validations:
+      required: true
+
+  - type: input
+    id: targets
+    attributes:
+      label: Target distributions
+      description: Which managed hosts show the problem.
+      placeholder: "Ubuntu 24.04, Rocky 9"
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant output
+      description: >-
+        Task output, or the host's entry from the JSON report. Redact
+        hostnames, IPs, and webhook URLs first.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: >-
+            I checked
+            [docs/troubleshooting.md](https://github.com/sameeralam3127/linux-vitals/blob/main/docs/troubleshooting.md)
+            and the
+            [known edge cases](https://github.com/sameeralam3127/linux-vitals/blob/main/docs/kernel-reboot-detection.md#known-edge-cases)
+          required: true
+        - label: I redacted secrets and identifying data from anything I pasted
+          required: true
