@@ -58,12 +58,13 @@ verifier:
 
 scenario:
   name: opensuse
+  # No syntax step: it would run before create, which is what makes the
+  # repo resolvable as a collection -- ansible-lint covers syntax anyway.
   # No idempotence step: every run renders a freshly timestamped report, so the
   # reporting role is changed by design on a second pass.
   test_sequence:
     - dependency
     - destroy
-    - syntax
     - create
     - prepare
     - converge

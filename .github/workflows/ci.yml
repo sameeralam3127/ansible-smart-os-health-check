@@ -75,5 +75,12 @@ jobs:
           ansible-galaxy collection install -r requirements.yml
           ansible-galaxy collection install -r molecule/collections.yml
 
+      - name: Symlink repository as the sameeralam3127.linux_vitals collection
+        # create.yml maintains this too, but the scenario's syntax check runs
+        # before create, and it needs the FQCN roles to already resolve.
+        run: |
+          mkdir -p .dev-collections/ansible_collections/sameeralam3127
+          ln -sfn "$GITHUB_WORKSPACE" .dev-collections/ansible_collections/sameeralam3127/linux_vitals
+
       - name: Run the ${{ matrix.scenario }} scenario
         run: molecule test -s ${{ matrix.scenario }}
