@@ -46,6 +46,7 @@ provisioner:
         vitals_expected_package_manager: dnf
         vitals_expected_reboot_sources:
           - "needs-restarting"
+        vitals_expect_time_sync_active: true
         vitals_test_time_sync_service: chronyd.service
         vitals_test_packages:
           - chrony

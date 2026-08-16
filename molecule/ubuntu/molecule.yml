@@ -48,6 +48,7 @@ provisioner:
           - "reboot-required-file"
           - "/run/reboot-required"
           - "/var/run/reboot-required"
+        vitals_expect_time_sync_active: true
         vitals_test_time_sync_service: chrony.service
         vitals_test_packages:
           - chrony

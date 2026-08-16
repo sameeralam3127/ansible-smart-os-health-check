@@ -56,12 +56,20 @@
           - host_report.boot_space.status in ['Healthy', 'Low', 'Not Available']
           - host_report.security.selinux_status | length > 0
 
-    - name: Assert the time synchronization service was resolved and is up
+    - name: Assert the time synchronization service was resolved
       ansible.builtin.assert:
         that:
           - "'chronyd or ntp is not installed' not in host_report.findings"
+        fail_msg: >-
+          The installed time-sync unit was not resolved:
+          {{ host_report.findings }}
+
+    - name: Assert the time synchronization service is reported as active
+      ansible.builtin.assert:
+        that:
           - "'Time synchronization service is not active' not in host_report.findings"
         fail_msg: "Time sync findings fired unexpectedly: {{ host_report.findings }}"
+      when: vitals_expect_time_sync_active | bool
 
     # ------------------------------------------------------------------
     # Reboot detection (per-distro, see docs/kernel-reboot-detection.md)

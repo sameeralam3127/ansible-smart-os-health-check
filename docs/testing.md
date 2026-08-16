@@ -65,7 +65,8 @@ scenario's ephemeral directory (`molecule converge` prints the path; it is
    and the container itself:
    - **discovery**: OS family, package manager, log source, uptime, memory,
      running kernel, boot-space status, security-control status, and that the
-     time-sync service resolved and is active;
+     installed time-sync unit was resolved (and, where a container can run it,
+     that it is active);
    - **reboot detection**: the source is one this distribution can actually
      provide, so a regression that silently degrades to the kernel-comparison
      fallback fails the scenario (see
@@ -116,6 +117,10 @@ in every scenario and are deliberately not asserted against:
 - `boot_space_status` is `Not Available` -- `/boot` is not a separate mount.
 - `RAM usage is critical` can fire depending on the Docker host's memory
   pressure at the time.
+- `chronyd` does not start in the openSUSE image on GitHub's runners, so that
+  scenario sets `vitals_expect_time_sync_active: false`. It still asserts the
+  installed unit was *resolved* -- what the scan is responsible for -- just not
+  that chrony can discipline a clock it does not own.
 
 Bootloader resolution and latest-kernel filtering are covered instead by the
 synthetic-root unit tests in `tests/test_reboot_detection.py`, which run the

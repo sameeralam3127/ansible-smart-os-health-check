@@ -50,10 +50,17 @@
       when: vitals_test_optional_packages | default([]) | length > 0
 
     - name: Enable the time synchronization service
+      # Started best-effort: chronyd cannot always run inside a container
+      # (openSUSE's unit fails to start on the GitHub runner). What the scan is
+      # under test for here is that it resolves and reports the unit, not that
+      # chrony can discipline a clock it does not own -- scenarios that can run
+      # it set vitals_expect_time_sync_active and verify.yml asserts on that.
       ansible.builtin.systemd_service:
         name: "{{ vitals_test_time_sync_service }}"
         enabled: true
         state: started
+      register: time_sync_start
+      failed_when: false
 
     - name: Install the flaky test service script
       ansible.builtin.copy:
