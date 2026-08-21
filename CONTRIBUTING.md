@@ -31,7 +31,7 @@ and why report/`.env` paths resolve from `inventory_dir`.
 
 ```bash
 pre-commit run --all-files
-ansible-lint roles/ playbooks/
+ansible-lint roles/ playbooks/ molecule/
 ansible-playbook playbooks/healthcheck.yml --syntax-check
 pytest -q
 ```
@@ -39,6 +39,22 @@ pytest -q
 All four run in CI ([.github/workflows/ci.yml](.github/workflows/ci.yml))
 on every push and pull request; a change isn't done until all four pass
 locally.
+
+On top of those, CI runs the Molecule scenarios -- one live systemd
+container per supported distribution (Ubuntu, Rocky, Fedora, openSUSE) --
+which are what prove the roles' runtime behaviour rather than just their
+syntax. They need a Docker daemon, so they are not part of the quick loop
+above:
+
+```bash
+molecule test -s ubuntu    # one distribution
+molecule test --all        # all four
+```
+
+See [docs/testing.md](docs/testing.md) for what each scenario covers, how to
+debug a failing one, and what containers can't prove. Any change to
+`vitals_scan` discovery, `vitals_heal`, or the report pipeline should be
+validated with at least one scenario locally before pushing.
 
 ## Adding or changing a variable
 

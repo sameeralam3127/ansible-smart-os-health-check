@@ -1,0 +1,91 @@
+---
+- name: Create
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    project_directory: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+    collection_link: >-
+      {{ project_directory }}/.dev-collections/ansible_collections/sameeralam3127/linux_vitals
+  tasks:
+    - name: Ensure the development collections directory exists
+      ansible.builtin.file:
+        path: "{{ collection_link | dirname }}"
+        state: directory
+        mode: "0755"
+
+    - name: Resolve this repository as the sameeralam3127.linux_vitals collection
+      # converge.yml uses FQCN role names and ANSIBLE_COLLECTIONS_PATH points at
+      # this symlink, so creating it here means a fresh clone can run
+      # `molecule test` with no manual setup step.
+      ansible.builtin.file:
+        src: "{{ project_directory }}"
+        dest: "{{ collection_link }}"
+        state: link
+        force: true
+
+    - name: Start the test containers
+      community.docker.docker_container:
+        name: "{{ item.name }}"
+        image: "{{ item.image }}"
+        hostname: "{{ item.hostname | default(item.name) }}"
+        state: started
+        recreate: true
+        # systemd has to be PID 1: vitals_scan reads service_facts and
+        # journalctl, so a sleep-forever container would exercise none of the
+        # paths this suite exists to prove.
+        command: "{{ item.command | default('/usr/lib/systemd/systemd') }}"
+        privileged: "{{ item.privileged | default(true) }}"
+        cgroupns_mode: "{{ item.cgroupns_mode | default('host') }}"
+        volumes: "{{ item.volumes | default(['/sys/fs/cgroup:/sys/fs/cgroup:rw']) }}"
+        tmpfs: "{{ item.tmpfs | default(['/run', '/run/lock']) }}"
+        pull: "{{ item.pull | default('missing') }}"
+      loop: "{{ molecule_yml.platforms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: containers
+
+    - name: Wait for systemd to finish booting in each container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - "{{ item.name }}"
+          - systemctl
+          - is-system-running
+      register: systemd_state
+      changed_when: false
+      # "degraded" is the normal end state in a container (units that need real
+      # hardware fail), so anything that has stopped initialising will do.
+      failed_when: false
+      until: systemd_state.stdout | trim in ['running', 'degraded']
+      retries: 30
+      delay: 2
+      loop: "{{ molecule_yml.platforms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Build the instance config Molecule connects with
+      ansible.builtin.set_fact:
+        instance_config: >-
+          {{
+            instance_config | default([]) + [{
+              'instance': item.name,
+              'address': item.name,
+              'user': item.user | default('root'),
+              'port': '22',
+              'connection': 'community.docker.docker',
+            }]
+          }}
+      loop: "{{ molecule_yml.platforms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Dump the instance config
+      ansible.builtin.copy:
+        content: |
+          # Molecule managed
+
+          {{ instance_config | to_nice_yaml }}
+        dest: "{{ molecule_instance_config }}"
+        mode: "0600"

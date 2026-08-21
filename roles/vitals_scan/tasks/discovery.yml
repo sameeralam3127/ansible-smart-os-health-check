@@ -819,7 +819,13 @@
         if ansible_facts['os_family'] == 'Suse'
         else ''
       }}
-    linux_vitals_selinux_status: "{{ linux_vitals_selinux_cmd.stdout | default('not-installed') | trim }}"
+    linux_vitals_selinux_status: >-
+      {{
+        linux_vitals_selinux_cmd.stdout
+        | default('', true)
+        | trim
+        | default('not-installed', true)
+      }}
     linux_vitals_apparmor_status: >-
       {{
         'enabled'
@@ -903,20 +909,19 @@
     linux_vitals_boot_mount: >-
       {{
         (
-          ansible_facts['mounts']
-          | selectattr('mount', 'equalto', '/boot')
-          | list
-          | first
-        )
-        | default(
           (
-            ansible_facts['mounts']
+            ansible_facts['mounts'] | default([])
+            | selectattr('mount', 'equalto', '/boot')
+            | list
+          )
+          + (
+            ansible_facts['mounts'] | default([])
             | selectattr('mount', 'equalto', '/boot/efi')
             | list
-            | first
-          ),
-          true
+          )
         )
+        | first
+        | default({}, true)
       }}
   tags:
     - discovery

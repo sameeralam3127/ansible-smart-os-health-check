@@ -1,0 +1,21 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: true
+  vars:
+    molecule_report_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/reports"
+    # Self-healing is off by default; the whole point of this scenario is to
+    # prove the heal path, so it is opted into here.
+    linux_vitals_heal_enabled: true
+    # The report role writes to inventory_dir by default, which is Molecule's
+    # generated inventory directory -- pin every output under the scenario's
+    # ephemeral directory instead so verify.yml knows where to look.
+    linux_vitals_output_path: "{{ molecule_report_dir }}/linux_vitals_report.html"
+    linux_vitals_json_output_path: "{{ molecule_report_dir }}/linux_vitals_report.json"
+    linux_vitals_report_archive_dir: "{{ molecule_report_dir }}/archive"
+    linux_vitals_snapshot_dir: "{{ molecule_report_dir }}/snapshots"
+    linux_vitals_report_title: "LinuxVitals Molecule Dashboard"
+  roles:
+    - role: sameeralam3127.linux_vitals.vitals_scan
+    - role: sameeralam3127.linux_vitals.vitals_heal
+    - role: sameeralam3127.linux_vitals.vitals_report

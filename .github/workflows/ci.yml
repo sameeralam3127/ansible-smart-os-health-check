@@ -7,9 +7,21 @@ on:
       - feature/**
   pull_request:
 
+# Least privilege: nothing here writes to the repository. Actions are pinned
+# to commit SHAs (a tag can be moved; a SHA cannot) and kept current by
+# Dependabot -- see .github/dependabot.yml.
+permissions:
+  contents: read
+
+# A new push supersedes an in-flight run of the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       ANSIBLE_LOCAL_TEMP: .ansible/tmp
       ANSIBLE_REMOTE_TEMP: .ansible/tmp
@@ -17,10 +29,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -28,18 +42,60 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
-          ansible-galaxy collection install -r requirements.yml
+          ./.github/scripts/install-collections.sh
 
       - name: Symlink repository as the sameeralam3127.linux_vitals collection
         run: |
           mkdir -p .dev-collections/ansible_collections/sameeralam3127
-          ln -s "$GITHUB_WORKSPACE" .dev-collections/ansible_collections/sameeralam3127/linux_vitals
+          ln -sfn "$GITHUB_WORKSPACE" .dev-collections/ansible_collections/sameeralam3127/linux_vitals
 
       - name: Run playbook syntax check
         run: ansible-playbook playbooks/healthcheck.yml --syntax-check
 
       - name: Run ansible-lint
-        run: ansible-lint roles/ playbooks/
+        run: ansible-lint roles/ playbooks/ molecule/
 
       - name: Run pytest template checks
         run: pytest -q
+
+  molecule:
+    name: molecule (${{ matrix.scenario }})
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # One scenario per supported distribution family; see docs/testing.md.
+        scenario:
+          - ubuntu
+          - rocky
+          - fedora
+          - opensuse
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install validation tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          ./.github/scripts/install-collections.sh
+
+      - name: Symlink repository as the sameeralam3127.linux_vitals collection
+        # create.yml maintains this too, but the scenario's dependency step runs
+        # before create, and a fresh checkout has no symlink at all.
+        run: |
+          mkdir -p .dev-collections/ansible_collections/sameeralam3127
+          ln -sfn "$GITHUB_WORKSPACE" .dev-collections/ansible_collections/sameeralam3127/linux_vitals
+
+      - name: Run the ${{ matrix.scenario }} scenario
+        run: molecule test -s ${{ matrix.scenario }}

@@ -4,6 +4,63 @@ All notable changes to the `sameeralam3127.linux_vitals` collection are document
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.0] - 2026-08-16
+
+Molecule scenarios that run the roles against a live systemd host of every
+supported distribution ([#5](https://github.com/sameeralam3127/linux-vitals/issues/5)) --
+and the three runtime bugs they immediately found, none of which syntax
+checks, linting, or template tests could have caught.
+
+### Added
+
+- **Molecule scenarios for Ubuntu 24.04, Rocky Linux 9, Fedora 42, and
+  openSUSE Leap 15**, each booting a container with systemd as PID 1 and
+  running `vitals_scan` -> `vitals_heal` -> `vitals_report` end to end. The
+  scenarios share one set of playbooks under `molecule/resources/` and differ
+  only in image and per-distro expectations.
+- **Self-healing is exercised for real**: each scenario plants two enabled
+  systemd units, one that fails on first start and succeeds on restart and one
+  that can never start, then asserts the first is reported `Fixed` (and is
+  genuinely `active` on the host) while the second raises a "requires manual
+  follow-up" finding.
+- **Per-distro reboot detection is asserted against the source that
+  distribution should use** -- `reboot-required-file` on Ubuntu,
+  `needs-restarting` on Rocky, `dnf-needs-restarting` on Fedora,
+  `zypper-needs-rebooting` on openSUSE -- so a regression that silently
+  degrades to the kernel-comparison fallback fails the run.
+- CI matrix job running all four scenarios on every push and pull request.
+- **[docs/testing.md](docs/testing.md)**, covering both test layers, how to run
+  and debug a scenario, the SUSE image fallback strategy, and what containers
+  cannot prove.
+
+### Fixed
+
+- **Self-healing never restarted anything.** `vitals_heal` selected services
+  with `state == 'failed'` *and* a `status` containing `enabled`, but
+  `service_facts` describes a failed systemd unit as `state: stopped` with
+  `status: failed` -- the unit-file state is replaced by `failed`, so no unit
+  could ever match both conditions. Failed units are now identified by either
+  field, and "is this enabled at boot" is answered per unit with
+  `systemctl is-enabled` (read from stdout, since it exits 0 for `static` and
+  `indirect` too).
+- **Healing outcomes never reached the report.** `vitals_scan` builds
+  `linux_vitals_result` before `vitals_heal` runs, so `services_healed`,
+  `healing_results`, and the "requires manual follow-up" findings were always
+  empty in the dashboard and JSON report even when healing had happened.
+  `vitals_heal` now rebuilds the result after a healing pass.
+- **The scan crashed on any host without a separate `/boot` mount.**
+  `linux_vitals_boot_mount` chained two `| first` lookups through
+  `| default(..., true)`; with neither `/boot` nor `/boot/efi` in
+  `ansible_facts['mounts']` -- the common case for cloud images that keep
+  `/boot` on the root filesystem, and for containers -- both sides resolved to
+  Undefined and the play failed with "No first item, sequence was empty".
+  Boot-space status now degrades to `Not Available` instead.
+- **`selinux_status` was reported as an empty string on Debian hosts.**
+  `getenforce` is absent there, so the command returned an empty `stdout`,
+  which `| default('not-installed')` does not replace (it only substitutes for
+  Undefined). The dashboard showed a blank SELinux field instead of
+  `not-installed`.
+
 ## [1.1.0] - 2026-08-07
 
 Distro-specific hardening of reboot-required, latest-kernel, and bootloader

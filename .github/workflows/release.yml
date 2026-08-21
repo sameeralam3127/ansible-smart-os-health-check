@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# Least privilege: publishing needs no repository write access. Actions are
+# pinned to commit SHAs (a tag can be moved; a SHA cannot) and kept current by
+# Dependabot -- see .github/dependabot.yml.
+permissions:
+  contents: read
+
+# Galaxy versions are immutable, so two concurrent publishes of the same tag
+# would race to an unrecoverable state.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to Ansible Galaxy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          ./.github/scripts/install-collections.sh
+
+      - name: Confirm the Galaxy API key is available
+        env:
+          GALAXY_API_KEY: ${{ secrets.API_KEY }}
+        run: |
+          if [ -z "$GALAXY_API_KEY" ]; then
+            echo "::error::The API_KEY secret is not readable by this job." \
+                 "Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Read the collection version
+        id: collection
+        run: |
+          version=$(python -c "import yaml; print(yaml.safe_load(open('galaxy.yml'))['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Collection version: $version"
+
+      - name: Check the tag matches galaxy.yml
+        # Galaxy versions are immutable, so a tag that disagrees with galaxy.yml
+        # would publish something nobody can correct afterwards.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "${{ steps.collection.outputs.version }}" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match galaxy.yml" \
+                 "version ${{ steps.collection.outputs.version }}."
+            exit 1
+          fi
+
+      - name: Symlink repository as the sameeralam3127.linux_vitals collection
+        run: |
+          mkdir -p .dev-collections/ansible_collections/sameeralam3127
+          ln -sfn "$GITHUB_WORKSPACE" .dev-collections/ansible_collections/sameeralam3127/linux_vitals
+
+      - name: Re-run the fast checks
+        # The Molecule scenarios already ran on main; these are the cheap checks
+        # worth repeating against the exact tree being published.
+        run: |
+          ansible-playbook playbooks/healthcheck.yml --syntax-check
+          ansible-lint roles/ playbooks/ molecule/
+          pytest -q
+
+      - name: Build the collection
+        run: ansible-galaxy collection build --force --output-path dist/
+
+      - name: Check whether this version is already on Galaxy
+        # A run cancelled (job timeout, manual stop) after Galaxy accepted the
+        # upload leaves the version published while the job reports failure.
+        # Galaxy versions are immutable, so a straight retry would then fail
+        # forever. Re-tagging the same version is impossible without deleting
+        # the tag, so an already-present version means "this release landed",
+        # not "someone forgot to bump" -- treat it as success and skip.
+        id: galaxy
+        env:
+          VERSION: ${{ steps.collection.outputs.version }}
+        run: |
+          url="https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/index/sameeralam3127/linux_vitals/versions/${VERSION}/"
+          code=$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$url" || echo 000)
+          case "$code" in
+            200)
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::Version ${VERSION} is already on Galaxy; skipping publish."
+              ;;
+            404)
+              echo "published=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Galaxy returned HTTP ${code} when checking for version ${VERSION}."
+              exit 1
+              ;;
+          esac
+
+      - name: Publish to Ansible Galaxy
+        if: steps.galaxy.outputs.published == 'false'
+        env:
+          GALAXY_API_KEY: ${{ secrets.API_KEY }}
+        run: |
+          ansible-galaxy collection publish \
+            "dist/sameeralam3127-linux_vitals-${{ steps.collection.outputs.version }}.tar.gz" \
+            --api-key "$GALAXY_API_KEY"
+
+      - name: Confirm the version is live on Galaxy
+        # Closes the loop in both directions: a fresh publish really imported,
+        # and a skipped one really is there.
+        env:
+          VERSION: ${{ steps.collection.outputs.version }}
+        run: |
+          url="https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/index/sameeralam3127/linux_vitals/versions/${VERSION}/"
+          for attempt in 1 2 3 4 5; do
+            code=$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$url" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "Version ${VERSION} is live on Galaxy."
+              exit 0
+            fi
+            echo "Attempt ${attempt}: Galaxy returned HTTP ${code}; waiting for the import to settle."
+            sleep 20
+          done
+          echo "::error::Version ${VERSION} is not queryable on Galaxy after publishing."
+          exit 1
+
+      - name: Upload the built artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sameeralam3127-linux_vitals-${{ steps.collection.outputs.version }}
+          path: dist/*.tar.gz
