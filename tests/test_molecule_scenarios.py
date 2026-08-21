@@ -36,11 +36,19 @@ REQUIRED_HOST_VARS = {
 
 
 def _scenario_dirs() -> list[Path]:
+    # Called during collection to parametrise, so it must not raise: a missing
+    # molecule/ directory should fail one explicit test, not abort the run.
+    if not MOLECULE_DIR.is_dir():
+        return []
     return sorted(
         path
         for path in MOLECULE_DIR.iterdir()
         if path.is_dir() and path.name != "resources"
     )
+
+
+def test_molecule_scenarios_are_present() -> None:
+    assert _scenario_dirs(), f"no Molecule scenarios found under {MOLECULE_DIR}"
 
 
 def _load_yaml(path: Path):
@@ -128,12 +136,23 @@ def test_scenario_declares_the_host_vars_verify_yml_depends_on(scenario_dir: Pat
     assert len(host_vars[instance_name]["vitals_expected_reboot_sources"]) >= 1
 
 
-@pytest.mark.parametrize("scenario_dir", _scenario_dirs(), ids=lambda p: p.name)
-def test_scenario_collections_yml_pins_community_docker(scenario_dir: Path) -> None:
-    config = _load_yaml(scenario_dir / "collections.yml")
+def test_shared_collections_file_pins_community_docker() -> None:
+    # One shared file rather than one per scenario: CI installs the very same
+    # file for both the lint job and the Molecule jobs, so the harness cannot
+    # drift from what ansible-lint resolves against.
+    config = _load_yaml(MOLECULE_DIR / "collections.yml")
     names = {c["name"] for c in config["collections"]}
 
     assert "community.docker" in names
+
+
+@pytest.mark.parametrize("scenario_dir", _scenario_dirs(), ids=lambda p: p.name)
+def test_scenario_points_its_galaxy_dependency_at_the_shared_file(scenario_dir: Path) -> None:
+    config = _load_yaml(scenario_dir / "molecule.yml")
+    options = config["dependency"]["options"]
+
+    assert options["requirements-file"] == "molecule/collections.yml"
+    assert (REPO_ROOT / options["requirements-file"]).exists()
 
 
 def test_scenarios_cover_debian_redhat_and_suse_families() -> None:
